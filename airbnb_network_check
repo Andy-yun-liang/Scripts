@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# simple_airbnb_scan_en0.sh
+# Minimal macOS script: uses interface en0, IPv4 only, assumes /24 subnet.
+# Saves output files in the same directory as the script.
+# Requires: nmap
+# Usage:
+#   chmod +x simple_airbnb_scan_en0.sh
+#   ./simple_airbnb_scan_en0.sh
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# Hardcoded interface (change if needed)
+IFACE=en0
+
+# Directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Get IPv4 address for IFACE (ignore IPv6)
+IP=$(ifconfig "$IFACE" 2>/dev/null | awk '/inet / {print $2; exit}')
+if [ -z "$IP" ]; then
+  echo "No IPv4 address found on interface $IFACE. Are you connected to Wi-Fi?"
+  exit 1
+fi
+
+# Assume /24 subnet
+NET="${IP%.*}.0/24"
+
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+DEVICES_FILE="$SCRIPT_DIR/devices_${TIMESTAMP}.txt"
+PORTS_FILE="$SCRIPT_DIR/open_ports_${TIMESTAMP}.gnmap"
+
+printf "Interface: %s\nLocal IP:  %s\nNetwork:   %s\n" "$IFACE" "$IP" "$NET"
+printf "Saving device list to: %s\n" "$DEVICES_FILE"
+
+# Host discovery (ARP + ping)
+sudo nmap -sn -PR "$NET" -oG - | awk '/Status: Up/ {print $2}' | sort -u | tee "$DEVICES_FILE"
+
+COUNT=$(wc -l < "$DEVICES_FILE" || true)
+printf "Devices found: %s\n" "$COUNT"
+
+# Ask whether to scan common camera/web ports
+read -r -p "Scan for common camera/web ports (80,443,554,8000,8080,8888)? [y/N] " answer
+case "$answer" in
+  [yY]|[yY][eE][sS])
+    PORTS="80,443,554,8000,8080,8888"
+    printf "Scanning %s for ports: %s (results: %s)\n" "$NET" "$PORTS" "$PORTS_FILE"
+    sudo nmap -p "$PORTS" --open -T4 "$NET" -oG "$PORTS_FILE"
+    printf "Open port lines (if any):\n"
+    grep "/open/" "$PORTS_FILE" || printf "No open ports found (or none matched the grep).\n"
+    ;;
+  *)
+    printf "Skipping port scan.\n"
+    ;;
+esac
+
+printf "Done. Files saved in: %s\n" "$SCRIPT_DIR"
+printf "Reminder to self: To get MAC address info, run: arp -a\n"
+
